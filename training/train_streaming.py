@@ -1,121 +1,155 @@
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-from datetime import datetime
 from pathlib import Path
-from utils.commonVoice_dataset import load_common_voice_stream, create_tf_dataset, visualize_sample
+from utils.commonVoice_dataset import load_common_voice_stream, create_tf_dataset
 from utils.audio_processing import AudioProcessor
 from utils.tokenizer import Tokenizer
 from models.stt_model.architecture import create_STT_with_CTC
+from jiwer import wer, cer
 
 # Configuration
 tf.keras.mixed_precision.set_global_policy('float32')
 
 SAMPLE_RATE = 16000
-EPOCHS = 20
-BATCH_SIZE = 32
-MAX_TRAIN_SAMPLES = 1000
+EPOCHS = 10
+BATCH_SIZE = 8
+MAX_TRAIN_SAMPLES = 32  # Start small for testing
 
-# Creating folders for logs and checkpoints
+# wer and cer metrics
+class STTMetrics(tf.keras.callbacks.Callback):
+    def __init__(self, val_dataset, tokenizer, samples=5):
+        super().__init__()
+        self.val_data = val_dataset
+        self.tokenizer = tokenizer
+        self.samples = samples
+
+    def on_epoch_end(self, epoch, logs=None):
+        # Greedy decoder
+        pred_logits = self.model.predict(self.val_data.take(1))[0]
+        pred_ids = tf.keras.backend.ctc_decode(
+            pred_logits, 
+            input_length=[pred_logits.shape[1]]*pred_logits.shape[0],
+            greedy=True
+        )[0][0]
+        
+        # Convert to text
+        texts_pred = [self.tokenizer.decode(ids) for ids in pred_ids.numpy()]
+        texts_true = [self.tokenizer.decode(batch[1]) for batch in self.val_data.take(1)]
+        
+        # Calculate WER/CER
+        logs["wer"] = wer(texts_true, texts_pred)
+        logs["cer"] = cer(texts_true, texts_pred)
+        print(f"\nValidation WER: {logs['wer']:.2%}, CER: {logs['cer']:.2%}")
+
+
 def setup_directories():
     Path("checkpoints").mkdir(exist_ok=True)
     Path("logs").mkdir(exist_ok=True)
 
-# Load and preprocess train/test data
 def get_datasets(tokenizer: Tokenizer):
+    """Load and preprocess datasets with proper CTC formatting"""
+    train_hf = load_common_voice_stream("train", max_samples=MAX_TRAIN_SAMPLES)
+    test_hf = load_common_voice_stream("validation", max_samples=MAX_TRAIN_SAMPLES//2)
+
+    print("Building tokenizer vocabulary...")
+    tokenizer.build_vocab(train_hf.take(32))  # Build from first 100 samples
+
+    audio_processor = AudioProcessor()  
     
-    # Load small datasets for testing
-    train_hf = load_common_voice_stream("train",max_samples=MAX_TRAIN_SAMPLES)
-    test_hf = load_common_voice_stream("validation",max_samples=MAX_TRAIN_SAMPLES)
-
-    print("Building tokenizer vocablary.....")
-    tokenizer.build_vocab( train_hf.take(100) )
-
-    # Create tensorflow datasets
-    audio_processor = AudioProcessor()
-    train_dataset = create_tf_dataset(train_hf,audio_processor,tokenizer,batch_size=BATCH_SIZE).repeat()
-    test_dataset = create_tf_dataset(test_hf,audio_processor,tokenizer,batch_size=BATCH_SIZE)
-
+    # Create datasets with proper CTC formatting
+    train_dataset = create_tf_dataset(
+        train_hf, 
+        audio_processor,
+        tokenizer,
+        batch_size=BATCH_SIZE
+    )
+    test_dataset = create_tf_dataset(
+        test_hf,
+        audio_processor,
+        tokenizer,
+        batch_size=BATCH_SIZE
+    )
+    
     return train_dataset, test_dataset
 
-
 def train_model():
-    # Initlize components
     setup_directories()
-    tokenizer = Tokenizer()
+    tokenizer = Tokenizer(max_text_length=50)  # Limit text length
     train_dataset, test_dataset = get_datasets(tokenizer)
 
-    # Creating the model
+    # Initialize model with correct blank index
     model = create_STT_with_CTC(
         input_dim=13,
-        vocab_size= len(tokenizer.vocab) + 1 
+        vocab_size=len(tokenizer.vocab)  # Blank will be at len(vocab)
     )
 
-        # --- VERIFICATION ---
-    print("\n=== Pre-Training Verification ===")
-    print("Vocab size:", len(tokenizer.vocab))
-    print("Blank token index:", len(tokenizer.vocab))  # Should match CTC config
-    
-    # Verify first training batch
-    for batch in train_dataset.take(1):
-        mfcc_batch, label_batch = batch[0]  # Unpack (inputs, dummy_outputs)
-        print("\nMFCC batch shape:", mfcc_batch.shape)  # Should be (batch, time, 13)
-        print("Labels batch shape:", label_batch.shape) # Should be (batch, text_len)
-        print("Sample labels:", label_batch[0].numpy()) # Show first sample's tokens
-    
-    input("Press Enter to start training...")  # Pause for inspection
-    # ----------------------------------------
+    # Verify blank index matches vocabulary
+    print(f"Vocabulary size: {len(tokenizer.vocab)}")
+    print(f"Blank token index: {len(tokenizer.vocab)}")
 
-    # Specify check points and tensorboard logs
     callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
             "checkpoints/model_{epoch:02d}.keras",
-            save_best_only = True
+            save_best_only=True,
+            monitor='val_loss'
         ),
-        tf.keras.callbacks.TensorBoard(log_dir= "logs")
+        tf.keras.callbacks.TensorBoard(
+            log_dir="logs",
+            update_freq='epoch'
+        ),
+        tf.keras.callbacks.EarlyStopping(
+            patience=3,
+            restore_best_weights=True
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.2,  # More aggressive learning rate reduction
+        patience=2,
+        min_lr=1e-6,
+        verbose=1
+        ),
+        # STTMetrics(test_dataset, tokenizer)
     ]
 
-    # Adding learning rate scheduling
-    callbacks.append(tf.keras.callbacks.ReduceLROnPlateau(patience=2, verbose=1))
+    # Calculate steps per epoch
+    steps_per_epoch = MAX_TRAIN_SAMPLES // BATCH_SIZE
+    validation_steps = (MAX_TRAIN_SAMPLES // 2) // BATCH_SIZE
 
-    # Training the model
-    print("Starting training....")
+    print("Final logits shape:", model.output_shape)
+
+    print("Starting training...")
     history = model.fit(
-        train_dataset.repeat(),  # Add .repeat() here
-        steps_per_epoch=MAX_TRAIN_SAMPLES//BATCH_SIZE,  # Match data size
-        validation_steps=50,
-        validation_data = test_dataset,
-        epochs = EPOCHS,
-        callbacks = callbacks
+        train_dataset,
+        steps_per_epoch=steps_per_epoch,
+        validation_data=test_dataset,
+        validation_steps=validation_steps,
+        epochs=EPOCHS,
+        callbacks=callbacks,
+        verbose=1
     )
     
     return history
 
-
 def plot_training(history):
-    """Plot training/validation loss."""
-    plt.figure(figsize=(10, 4))
+    plt.figure(figsize=(12, 5))
     plt.plot(history.history['loss'], label='Training Loss')
     plt.plot(history.history['val_loss'], label='Validation Loss')
     plt.title("Training Progress")
     plt.xlabel("Epochs")
-    plt.ylabel("Loss")
+    plt.ylabel("CTC Loss")
     plt.legend()
-    plt.savefig("logs/training_plot.png")
+    plt.savefig("logs/training_curve.png")
     plt.show()
 
 if __name__ == "__main__":
-    # Phase 1: Architecture Validation
-    print("\n=== Testing Model Architecture ===")
-    dummy_mfcc = tf.random.normal((2, 100, 13))  # Test batch
-    dummy_labels = tf.constant([[1, 2, 3], [4, 5, 6]], dtype=tf.int32)
+    # Verify GPU availability
+    print("GPU Available:", tf.config.list_physical_devices('GPU'))
     
-    test_model = create_STT_with_CTC(vocab_size=37)  # Match your test vocab size
-    test_output = test_model.predict([dummy_mfcc, dummy_labels])
-    print("Architecture test passed! Output shape:", test_output.shape)
-    
-    # Phase 2: Actual Training (uncomment when ready)
-    print("\n=== Starting Real Training ===")
+    # Start training
     history = train_model()
     plot_training(history)
-    print("Training complete! Check checkpoints/ and logs/")
+    
+    # Save final model
+    
+    print("Training complete. Models saved to checkpoints")

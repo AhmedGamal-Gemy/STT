@@ -1,0 +1,10 @@
+tensorflow
+numpy
+matplotlib
+pathlib
+jiwer
+librosa
+librosa.display
+pyaudio
+wave
+datasets

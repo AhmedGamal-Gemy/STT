@@ -11,18 +11,33 @@ class AudioProcessor:
     
     def __init__(
             self,
-            sample_rate : int = 16000,  # Sample rate is how many samples taken per second as the audio is continous (infinite) so we just take samples
-            n_mfcc : int = 13,          # MFCC is excatly like PCA It compress the audio to number of MFCCs 
-            frame_length: int = 2048,   # Frame length is how much sample is being processed at a time
-            hop_length: int = 512       # Hop length is the distance ( in samples ) between the starting point of one frame and the starting point of the next frame
+            sample_rate : int = 16000,      # Sample rate is how many samples taken per second as the audio is continous (infinite) so we just take samples
+            n_mfcc : int = 13,              # MFCC is excatly like PCA It compress the audio to number of MFCCs 
+            frame_length: int = 2048,       # Frame length is how much sample is being processed at a time
+            hop_length: int = 512,          # Hop length is the distance ( in samples ) between the starting point of one frame and the starting point of the next frame
+            speed_factors=(0.9, 1.0, 1.1)   # Speed factors for which speeding the audio (Data agumentation)
             ):
         
         self.sample_rate = sample_rate
         self.n_mfcc = n_mfcc
         self.frame_length = frame_length
         self.hop_length = hop_length
+        self.speed_factors = speed_factors
         self.audio_interface = pyaudio.PyAudio()
-    
+
+    def speed_audio(self, audio):
+        # Add speed perturbation without changing audio length
+        factor = np.random.choice(self.speed_factors)
+        if factor == 1.0:
+            return audio
+            
+        # Apply speed change
+        perturbed = librosa.effects.time_stretch(audio, rate=factor)
+        
+        # Maintain original length
+        if len(perturbed) < len(audio):
+            return np.pad(perturbed, (0, len(audio) - len(perturbed)))
+        return perturbed[:len(audio)]
     # Function for recording audio and then return the audio as multi diminsional numpy array
     def record_audio(self, duration : float = 1.0) -> np.ndarray :
 
@@ -71,6 +86,9 @@ class AudioProcessor:
         
         # Make sure the type is float 32
         audio = audio.astype(np.float32)
+        
+        # Speed the audio
+        audio = self.speed_audio(audio)
         
         # Normalize the audio
         audio = audio / ( np.max( np.abs(audio) ) + 1e-12)

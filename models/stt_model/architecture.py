@@ -27,15 +27,36 @@ def build_stt_model(
     # CNN for pattern extraction, Padding is to add same padding up down right and left.
     # and this will result for the output shape to be the same as input shape
 
-    x = layers.Conv2D(32, (3,3), activation = "relu", padding = "same") (x)
+    # CNN Block with strided convolutions
+    x = layers.Conv2D(32, (3,3), strides=(1,2), activation="relu", padding="same")(x)
+    x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
 
+    x = layers.Conv2D(64, (3,3), strides=(1,2), activation="relu", padding="same")(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
+
+
+    # x = layers.Conv2D(32, (3,3), activation = "relu", padding = "same") (x)
+    # x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
+
+    # x = layers.Conv2D(32, (3,3), activation = "relu", padding = "same") (x)
+    # x = layers.MaxPooling2D( (1,2) ) (x) 
+ 
     # Now reshaping for RNN ( batch, time, feature ) by just feature * channels
     x = layers.Reshape( (-1, x.shape[2] * x.shape[3] ) ) (x)
 
-    # BiLSTM layers. Bidirection to capture information from both sides and LSTM because audio is sequential
-    x = layers.Bidirectional( layers.LSTM( 128, return_sequences = True ) ) (x)
-    x = layers.Bidirectional( layers.LSTM( 128, return_sequences = True ) ) (x)
+    print("Reshaped features dimension:", x.shape)
+
+    # BiLSTM Layers with regularization to avoid overfitting. Bidirection to capture information from both sides and LSTM because audio is sequential
+    x = layers.Bidirectional(layers.LSTM(256, return_sequences=True, 
+                                      dropout=0.3, recurrent_dropout=0.2))(x)
+    x = layers.Bidirectional(layers.LSTM(256, return_sequences=True,
+                                      dropout=0.3, recurrent_dropout=0.2))(x)
+
+    # Time-distributed dense : adds non-linear feature transformation before CTC
+    x = layers.TimeDistributed(layers.Dense(512, activation="relu"))(x)
+    x = layers.Dropout(0.4)(x)
 
     # Output layer (logits for each token at every time step) and + 1 to add the blank
     outputs = layers.Dense(vocab_size + 1, activation="linear", name="logits")(x)
@@ -44,49 +65,46 @@ def build_stt_model(
 
 # Create the CTC layer for Speech task. (CTC loss is automatically assign portions of audio to labels and penlizes any predication that is incorrect)
 class CTCLossLayer(layers.Layer):
-    """Custom CTC loss layer with proper dimension handling"""
-    def __init__(self,blank_index, name="ctc_loss"):
+    """Custom CTC loss layer."""
+    def __init__(self, blank_index, name="ctc_loss"):
         super().__init__(name=name)
         self.blank_index = blank_index
-        
+
     def call(self, inputs):
-        # Unpack inputs - order matters!
-        # y_pred should come first (logits), then y_true (labels)
         y_pred, y_true = inputs  # y_pred shape: (batch, time, vocab+1)
+
+        # DEBUGGING
+        tf.debugging.assert_rank(y_pred, 3, message="Logits must be 3D (batch, time, vocab)")
+        tf.debugging.assert_rank(y_true, 2, message="Labels must be 2D (batch, labels)")
         
-        # Calculate sequence lengths
         batch_size = tf.shape(y_pred)[0]
         input_length = tf.fill([batch_size], tf.shape(y_pred)[1])  # [batch_size]
         label_length = tf.reduce_sum(
             tf.cast(tf.not_equal(y_true, 0), tf.int32),  # 0 = padding
             axis=1
         )
-      
         
-        # Compute CTC loss
+        # Critical Fix 3: Use modern CTC loss with blank index
         loss = tf.nn.ctc_loss(
             labels=y_true,
             logits=y_pred,
             label_length=label_length,
             logit_length=input_length,
             logits_time_major=False,
-            blank_index=self.blank_index  # Typically last index
+            blank_index=self.blank_index
         )
         self.add_loss(tf.reduce_mean(loss))
         return y_pred
-    
-
-    def compute_output_shape(self, input_shapes):
-        # input_shapes is a list/tuple: (y_true_shape, y_pred_shape)
-        return input_shapes[1]  # Return shape of y_pred
 
     def get_config(self):
         return {"blank_index": self.blank_index}
 
 
-
 # Combine the basic model with CTC loss        
 def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
+
+    # tf.config.optimizer.set_jit(True)
+
     # Input layers
     mfcc_input = layers.Input(shape=(None, input_dim), name="MFCC_input")
     label_input = layers.Input(shape=(None,), dtype=tf.int32, name="Label_input")
@@ -101,7 +119,13 @@ def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
     
     # Compile model
     model = Model(inputs=[mfcc_input, label_input], outputs=outputs)
-    model.compile(optimizer=tf.keras.optimizers.Adam(1e-4))
+
+    optimizer = tf.keras.optimizers.Adam(
+    learning_rate=1e-4,
+    global_clipnorm=1.0,  # Add this to prevent exploding gradients
+    )
+
+    model.compile(optimizer=optimizer)
     
     return model
 
