@@ -115,11 +115,10 @@ def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
     model = Model(inputs=[mfcc_input, label_input], outputs=outputs)
 
     optimizer = tf.keras.optimizers.Adam(
-        learning_rate=tf.keras.optimizers.schedules.ExponentialDecay(
-            initial_learning_rate=1e-4,
-            decay_steps=2000,
-            decay_rate=0.95
-        ),
+         learning_rate=3e-4,  # Fixed initial rate
+        beta_1=0.9,
+        beta_2=0.98,
+        epsilon=1e-9,
         clipnorm=1.0
     )
 

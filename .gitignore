@@ -1,4 +1,6 @@
 data_cache/
 logs/
 checkpoints/
-__pycache__/
+training/__pycache__/
+models/stt_model/__pycache__/
+logs/training_curve.png
