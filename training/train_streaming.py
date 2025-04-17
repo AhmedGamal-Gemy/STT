@@ -14,7 +14,7 @@ tf.keras.mixed_precision.set_global_policy('float32')
 SAMPLE_RATE = 16000
 EPOCHS = 10
 BATCH_SIZE = 8
-MAX_TRAIN_SAMPLES = 32  # Start small for testing
+MAX_TRAIN_SAMPLES = 2000  # Start small for testing
 
 # wer and cer metrics
 class STTMetrics(tf.keras.callbacks.Callback):
@@ -25,22 +25,51 @@ class STTMetrics(tf.keras.callbacks.Callback):
         self.samples = samples
 
     def on_epoch_end(self, epoch, logs=None):
-        # Greedy decoder
-        pred_logits = self.model.predict(self.val_data.take(1))[0]
-        pred_ids = tf.keras.backend.ctc_decode(
-            pred_logits, 
-            input_length=[pred_logits.shape[1]]*pred_logits.shape[0],
-            greedy=True
-        )[0][0]
-        
-        # Convert to text
-        texts_pred = [self.tokenizer.decode(ids) for ids in pred_ids.numpy()]
-        texts_true = [self.tokenizer.decode(batch[1]) for batch in self.val_data.take(1)]
-        
-        # Calculate WER/CER
-        logs["wer"] = wer(texts_true, texts_pred)
-        logs["cer"] = cer(texts_true, texts_pred)
-        print(f"\nValidation WER: {logs['wer']:.2%}, CER: {logs['cer']:.2%}")
+        print("\n=== CTC DEBUG START ===")
+        try:
+            # Get validation batch
+            val_batch = next(iter(self.val_data.take(1)))
+            ((audio_inputs, true_labels), _) = val_batch
+            
+            # Get base model
+            base_model = next(layer for layer in self.model.layers 
+                            if isinstance(layer, tf.keras.Model))
+            
+            # Predict
+            pred_logits = base_model.predict(audio_inputs, verbose=0)
+            
+            # CTC decode
+            decoded, _ = tf.keras.backend.ctc_decode(
+                pred_logits,
+                input_length=[pred_logits.shape[1]] * pred_logits.shape[0],
+                greedy=True
+            )
+            pred_ids = decoded[0]
+
+            # Convert to numpy arrays properly
+            texts_pred = [
+                self.tokenizer.decode(tf.constant(ids))  # Convert numpy array to tensor
+                for ids in pred_ids.numpy()
+            ]
+            texts_true = [
+                self.tokenizer.decode(label) 
+                for label in true_labels
+            ]
+            
+            # Calculate metrics
+            logs["wer"] = wer(texts_true, texts_pred)
+            logs["cer"] = cer(texts_true, texts_pred)
+            
+            print(f"| Pred shape: {pred_ids.shape}")
+            print(f"| Sample pred: {texts_pred[0]}")
+            print(f"| Sample true: {texts_true[0]}")
+            print(f"| WER: {logs['wer']:.2%} | CER: {logs['cer']:.2%}")
+
+        except Exception as e:
+            print(f"| ERROR: {str(e)}")
+            raise
+            
+        print("=== CTC DEBUG END ===\n")
 
 
 def setup_directories():
@@ -109,7 +138,7 @@ def train_model():
         min_lr=1e-6,
         verbose=1
         ),
-        # STTMetrics(test_dataset, tokenizer)
+        STTMetrics(test_dataset, tokenizer)
     ]
 
     # Calculate steps per epoch

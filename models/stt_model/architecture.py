@@ -29,19 +29,12 @@ def build_stt_model(
 
     # CNN Block with strided convolutions
     x = layers.Conv2D(32, (3,3), strides=(1,2), activation="relu", padding="same")(x)
-    x = layers.BatchNormalization()(x)
+    # x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
 
     x = layers.Conv2D(64, (3,3), strides=(1,2), activation="relu", padding="same")(x)
-    x = layers.BatchNormalization()(x)
+    # x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
-
-
-    # x = layers.Conv2D(32, (3,3), activation = "relu", padding = "same") (x)
-    # x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
-
-    # x = layers.Conv2D(32, (3,3), activation = "relu", padding = "same") (x)
-    # x = layers.MaxPooling2D( (1,2) ) (x) 
  
     # Now reshaping for RNN ( batch, time, feature ) by just feature * channels
     x = layers.Reshape( (-1, x.shape[2] * x.shape[3] ) ) (x)
@@ -50,9 +43,9 @@ def build_stt_model(
 
     # BiLSTM Layers with regularization to avoid overfitting. Bidirection to capture information from both sides and LSTM because audio is sequential
     x = layers.Bidirectional(layers.LSTM(256, return_sequences=True, 
-                                      dropout=0.3, recurrent_dropout=0.2))(x)
+                                      dropout=0.5, recurrent_dropout=0.3))(x)
     x = layers.Bidirectional(layers.LSTM(256, return_sequences=True,
-                                      dropout=0.3, recurrent_dropout=0.2))(x)
+                                      dropout=0.5, recurrent_dropout=0.3))(x)
 
     # Time-distributed dense : adds non-linear feature transformation before CTC
     x = layers.TimeDistributed(layers.Dense(512, activation="relu"))(x)
@@ -84,7 +77,6 @@ class CTCLossLayer(layers.Layer):
             axis=1
         )
         
-        # Critical Fix 3: Use modern CTC loss with blank index
         loss = tf.nn.ctc_loss(
             labels=y_true,
             logits=y_pred,
@@ -93,7 +85,9 @@ class CTCLossLayer(layers.Layer):
             logits_time_major=False,
             blank_index=self.blank_index
         )
-        self.add_loss(tf.reduce_mean(loss))
+
+        # Add small epsilon to avoid log(0)
+        self.add_loss(tf.reduce_mean(loss) + 1e-7)
         return y_pred
 
     def get_config(self):
@@ -121,8 +115,12 @@ def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
     model = Model(inputs=[mfcc_input, label_input], outputs=outputs)
 
     optimizer = tf.keras.optimizers.Adam(
-    learning_rate=1e-4,
-    global_clipnorm=1.0,  # Add this to prevent exploding gradients
+        learning_rate=tf.keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate=1e-4,
+            decay_steps=2000,
+            decay_rate=0.95
+        ),
+        clipnorm=1.0
     )
 
     model.compile(optimizer=optimizer)
