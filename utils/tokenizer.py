@@ -5,15 +5,14 @@ import numpy as np
 
 class Tokenizer:
 
-    def __init__( self, vocab: List[str] = None, max_text_length: int = 100 ):
-
-        # Just specify special tokens like unkown characters in the vocab
-        self.special_tokens = { "<pad>" : 0, "<unk>" : 1 } 
-        self.vocab = vocab
-        self.max_text_length = max_text_length
-        self.char_to_id = {}
-        self.id_to_char = {}
-        self.chars_count = {}
+    def __init__(self, vocab: List[str] = None, max_text_length: int = 100):
+            # Add "<blank>" to special tokens (index 2)
+            self.special_tokens = {"<pad>": 0, "<unk>": 1, "<blank>": 2}  
+            self.vocab = list(self.special_tokens.keys())  # Initialize with special tokens
+            self.max_text_length = max_text_length
+            self.char_to_id = {}
+            self.id_to_char = {}
+            self.chars_count = {}
 
     # Get all vocablary from the dataset and create mappings from and to char
     def build_vocab(self, dataset: tf.data.Dataset) -> None:
@@ -52,14 +51,28 @@ class Tokenizer:
         return tf.convert_to_tensor(ids, dtype = tf.int32)
 
     # Decode from indexes to char and return string
-    def decode(self, token_ids : tf.Tensor) -> str:
-
-        # Iterating through each id in the inputted tensor and check if it's not special character return it
-        # from the existing mappings 
-        text = [ self.id_to_char.get(id, "") for id in token_ids.numpy() if id >= len(self.special_tokens) ]
-
-        return "".join(text)
+    def decode(self, token_ids):
+        """Convert token IDs back to text"""
+        # Handle different input types
+        if hasattr(token_ids, 'numpy'):
+            token_ids = token_ids.numpy()  # Convert TF tensor to numpy array
+        
+        # Filter out padding (0) and very large indices
+        token_ids = [id for id in token_ids if id > 0 and id < len(self.vocab)]
+        
+        # If empty, return special string
+        if not token_ids:
+            return "[empty]"
+            
+        # Convert IDs to characters and join
+        try:
+            return ''.join([self.vocab[id] for id in token_ids])
+        except IndexError:
+            # Handle any out-of-range indices
+            valid_ids = [id for id in token_ids if 0 <= id < len(self.vocab)]
+            return ''.join([self.vocab[id] for id in valid_ids])
     
+
     # Some visualizations
     def visualize_vocab(self, top_k: int = 20) -> None:
 
@@ -111,6 +124,3 @@ if __name__ == "__main__":
     print(f"Decoded: {decoded}")
 
     tokenizer.visualize_vocab(5)
-     
-    
-    

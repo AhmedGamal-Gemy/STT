@@ -1,3 +1,4 @@
+
 import tensorflow as tf
 from datasets import load_dataset, Dataset
 import numpy as np
@@ -82,6 +83,7 @@ def create_tf_dataset(hf_dataset, audio_processor, tokenizer, batch_size=32):
                 yield (mfcc, tokens)
             except Exception as e:
                 print(f"Skipping invalid sample: {e}")
+                continue
 
     # Create base dataset
     dataset = tf.data.Dataset.from_generator(
@@ -178,6 +180,3 @@ if __name__ == "__main__":
             
         print("MFCC batch shape:", mfcc_batch.shape)  # Should be (batch, time, n_mfcc)
         print("Token batch shape:", token_batch.shape) # (batch, max_token_length)
-
-
-

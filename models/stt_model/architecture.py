@@ -29,11 +29,11 @@ def build_stt_model(
 
     # CNN Block with strided convolutions
     x = layers.Conv2D(32, (3,3), strides=(1,2), activation="relu", padding="same")(x)
-    # x = layers.BatchNormalization()(x)
+    x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
 
     x = layers.Conv2D(64, (3,3), strides=(1,2), activation="relu", padding="same")(x)
-    # x = layers.BatchNormalization()(x)
+    x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
  
     # Now reshaping for RNN ( batch, time, feature ) by just feature * channels
@@ -43,23 +43,45 @@ def build_stt_model(
 
     # BiLSTM Layers with regularization to avoid overfitting. Bidirection to capture information from both sides and LSTM because audio is sequential
     x = layers.Bidirectional(layers.LSTM(256, return_sequences=True, 
-                                      dropout=0.5, recurrent_dropout=0.3))(x)
+                                      dropout=0.3, recurrent_dropout=0.2))(x)
     x = layers.Bidirectional(layers.LSTM(256, return_sequences=True,
-                                      dropout=0.5, recurrent_dropout=0.3))(x)
+                                      dropout=0.3, recurrent_dropout=0.2))(x)
 
     # Time-distributed dense : adds non-linear feature transformation before CTC
-    x = layers.TimeDistributed(layers.Dense(512, activation="relu"))(x)
+    x = layers.TimeDistributed(layers.Dense(256, activation="relu"))(x)
     x = layers.Dropout(0.4)(x)
 
-    # Output layer (logits for each token at every time step) and + 1 to add the blank
-    outputs = layers.Dense(vocab_size + 1, activation="linear", name="logits")(x)
+    # # Initialize embeddings with some prior knowledge
+    # char_embed_init = tf.random_normal_initializer(mean=0.0, stddev=0.1)
+    # outputs = layers.Dense(
+    #     vocab_size + 1,
+    #     activation="linear",
+    #     bias_initializer="zeros",
+    #     kernel_initializer=char_embed_init,
+    #     name="logits"
+    # )(x)
 
-    return Model(inputs = input_layer, outputs = outputs)
+    # Output layer with bias against blank token
+    blank_bias_initializer = tf.keras.initializers.Constant(
+        value=[-1.0 if i == vocab_size else 0.0 for i in range(vocab_size + 1)]
+    )
+    
+    outputs = layers.Dense(
+        vocab_size + 1, 
+        activation="linear", 
+        name="logits",
+        bias_initializer=blank_bias_initializer
+    )(x)
+
+    return Model(inputs=input_layer, outputs=outputs)
+
+
+
 
 # Create the CTC layer for Speech task. (CTC loss is automatically assign portions of audio to labels and penlizes any predication that is incorrect)
 class CTCLossLayer(layers.Layer):
-    """Custom CTC loss layer."""
-    def __init__(self, blank_index, name="ctc_loss"):
+    """Custom CTC loss layer with blank penalty."""
+    def __init__(self, blank_index=None, name="ctc_loss"):
         super().__init__(name=name)
         self.blank_index = blank_index
 
@@ -77,9 +99,17 @@ class CTCLossLayer(layers.Layer):
             axis=1
         )
         
+        # Apply a fixed penalty to blank token
+        blank_penalty_value = 20.0  # This forces the model away from blank predictions
+        blank_mask = tf.one_hot(indices=[self.blank_index], depth=tf.shape(y_pred)[-1])
+        blank_mask = tf.reshape(blank_mask, [1, 1, -1])  # Shape: [1, 1, vocab_size+1]
+        
+        # Subtract the penalty from blank logits
+        y_pred_adjusted = y_pred - (blank_mask * blank_penalty_value)
+        
         loss = tf.nn.ctc_loss(
             labels=y_true,
-            logits=y_pred,
+            logits=y_pred_adjusted,  # Use the adjusted logits with blank penalty
             label_length=label_length,
             logit_length=input_length,
             logits_time_major=False,
@@ -88,11 +118,10 @@ class CTCLossLayer(layers.Layer):
 
         # Add small epsilon to avoid log(0)
         self.add_loss(tf.reduce_mean(loss) + 1e-7)
-        return y_pred
+        return y_pred  # Return original predictions for the next layer
 
     def get_config(self):
         return {"blank_index": self.blank_index}
-
 
 # Combine the basic model with CTC loss        
 def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
@@ -115,10 +144,7 @@ def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
     model = Model(inputs=[mfcc_input, label_input], outputs=outputs)
 
     optimizer = tf.keras.optimizers.Adam(
-         learning_rate=3e-4,  # Fixed initial rate
-        beta_1=0.9,
-        beta_2=0.98,
-        epsilon=1e-9,
+        learning_rate=5e-4,
         clipnorm=1.0
     )
 
