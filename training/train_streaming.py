@@ -13,8 +13,8 @@ tf.keras.mixed_precision.set_global_policy('float32')
 
 SAMPLE_RATE = 16000
 EPOCHS = 10
-BATCH_SIZE = 48
-MAX_TRAIN_SAMPLES = 2048
+BATCH_SIZE = 32
+MAX_TRAIN_SAMPLES = 256
 
 # wer and cer metrics
 class STTMetrics(tf.keras.callbacks.Callback):
@@ -27,15 +27,19 @@ class STTMetrics(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
         print("\n=== CTC DEBUG START ===")
         try:
-            # Use the provided validation batch
+            print("Step 1: Getting validation batch...")
             ((audio_inputs, true_labels), _) = self.val_batch
                 
             # Get base model
+            print("Step 2: Getting base model...")
             base_model = next(layer for layer in self.model.layers 
                             if isinstance(layer, tf.keras.Model))
             
             # Predict
-            pred_logits = base_model.predict(audio_inputs, verbose=0)
+            print("Step 3: Running prediction (this might take a while)...")
+            pred_logits = base_model.predict(audio_inputs, verbose=1)  # Add verbose=1 to see progress
+            
+            print("Step 4: Processing predictions...")
             
             # Print top predictions for debugging
             log_probs = tf.nn.log_softmax(pred_logits, axis=-1)
@@ -43,7 +47,7 @@ class STTMetrics(tf.keras.callbacks.Callback):
             print(f"| Top 5 predictions at first timestep: {top_chars}")
             
             # DIRECT OVERRIDE: Set blank token to extremely negative value
-            blank_index = len(self.tokenizer.vocab)
+            blank_index = 2
             
             # Check if already numpy or if it's a TensorFlow tensor
             if isinstance(pred_logits, np.ndarray):
@@ -211,15 +215,130 @@ def train_model():
     validation_steps = (MAX_TRAIN_SAMPLES // 2) // BATCH_SIZE
 
     print("Starting training...")
-    history = model.fit(
+    # Use curriculum learning instead of direct model.fit
+    history = train_with_curriculum(
+        model,
         train_dataset,
-        steps_per_epoch=steps_per_epoch,
-        validation_data=test_dataset,
-        validation_steps=validation_steps,
-        epochs=EPOCHS,
-        callbacks=callbacks,
-        verbose=1
+        test_dataset,
+        validation_steps,
+        epochs=20,  # Total epochs across all stages
+        callbacks=callbacks
     )
+    
+    return history
+
+
+def train_with_curriculum(model, train_dataset, test_dataset,validation_steps, epochs=20, callbacks=None):
+    """Train the model using curriculum learning strategy."""
+    print("Starting curriculum learning training...")
+    
+    # Extract examples from dataset to sort them
+    print("Extracting examples from dataset...")
+    examples = []
+    targets = []
+    
+    # Add progress tracking variables
+    batch_count = 0
+    total_examples = 0
+    
+    # IMPORTANT: Limit number of examples to extract based on MAX_TRAIN_SAMPLES
+    max_examples_to_extract = MAX_TRAIN_SAMPLES
+    
+    # Take examples from the dataset with a limit
+    for batch in train_dataset:
+        # Update batch counter and print progress
+        batch_count += 1
+        if batch_count % 5 == 0:  # Print more frequently (every 5 batches)
+            print(f"Processed {batch_count} batches, {total_examples} examples so far...")
+        
+        # Structure is ((audio, labels), targets)
+        (audios, labels), batch_targets = batch
+        
+        # Convert to numpy for consistent handling
+        audios_np = audios.numpy()
+        labels_np = labels.numpy()
+        targets_np = batch_targets.numpy()
+        
+        # Store individual examples
+        for i in range(len(audios_np)):
+            examples.append((audios_np[i], labels_np[i]))
+            targets.append(targets_np[i])
+            total_examples += 1
+            
+            # Check if we've reached our example limit
+            if total_examples >= max_examples_to_extract:
+                print(f"Reached target of {max_examples_to_extract} examples - stopping extraction.")
+                break
+                
+        # Also break the outer loop if we've hit our target
+        if total_examples >= max_examples_to_extract:
+            break
+    
+    print(f"Extraction complete. Processed {batch_count} batches, extracted {len(examples)} examples")
+    
+    # Sort examples by audio length (shorter first)
+    print("Sorting examples by length...")
+    # Get audio length by finding non-zero values in first feature dimension
+    lengths = [np.sum(np.abs(ex[0][:, 0]) > 1e-6) for ex in examples]
+    sorted_indices = np.argsort(lengths)
+    
+    # Reorder examples and targets
+    sorted_examples = [examples[i] for i in sorted_indices]
+    sorted_targets = [targets[i] for i in sorted_indices]
+    
+    print("Examples sorted by length")
+    
+    # Define curriculum stages
+    stages = [
+        {"name": "Easy (short utterances)", "fraction": 0.25, "epochs": 15},
+        {"name": "Medium", "fraction": 0.6, "epochs": 15},
+        {"name": "Full dataset", "fraction": 1.0, "epochs": 20}
+    ]
+    
+    # Initialize history to collect metrics
+    history = {"loss": [], "val_loss": [], "wer": [], "cer": []}
+    
+    # Train in stages
+    for stage in stages:
+        print(f"\n===== CURRICULUM STAGE: {stage['name']} =====")
+        
+        # Calculate how many examples to use in this stage
+        stage_size = int(len(sorted_examples) * stage["fraction"])
+        print(f"Using {stage_size} examples ({stage['fraction']*100:.0f}% of dataset)")
+        
+        # Get examples for this stage
+        stage_examples = sorted_examples[:stage_size]
+        stage_targets = sorted_targets[:stage_size]
+        
+        # Create a TensorFlow dataset from these examples
+        print("Preparing dataset for this stage...")
+        # Convert back to the expected format: ((audio, labels), targets)
+        stage_audios = np.stack([ex[0] for ex in stage_examples])
+        stage_labels = np.stack([ex[1] for ex in stage_examples])
+        stage_targets = np.array(stage_targets)
+        
+        # Create dataset
+        stage_dataset = tf.data.Dataset.from_tensor_slices(
+            ((stage_audios, stage_labels), stage_targets)
+        ).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+        
+        # Train for this stage
+        print(f"Training for {stage['epochs']} epochs...")
+        stage_history = model.fit(
+            stage_dataset, 
+            epochs=stage["epochs"],
+            validation_data=test_dataset,
+            validation_steps=validation_steps,
+            callbacks=callbacks,
+            verbose=1
+        )
+        
+        # Collect metrics
+        for key in stage_history.history:
+            if key in history:
+                history[key].extend(stage_history.history[key])
+        
+        print(f"Completed {stage['name']} stage")
     
     return history
 

@@ -100,7 +100,7 @@ class CTCLossLayer(layers.Layer):
         )
         
         # Apply a fixed penalty to blank token
-        blank_penalty_value = 20.0  # This forces the model away from blank predictions
+        blank_penalty_value = 25.0  # This forces the model away from blank predictions
         blank_mask = tf.one_hot(indices=[self.blank_index], depth=tf.shape(y_pred)[-1])
         blank_mask = tf.reshape(blank_mask, [1, 1, -1])  # Shape: [1, 1, vocab_size+1]
         
@@ -137,7 +137,7 @@ def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
     logits = base_model(mfcc_input)  # shape: (batch, time, vocab+1)
     
     # CTC layer - note the input order!
-    ctc_layer = CTCLossLayer(blank_index=vocab_size)
+    ctc_layer = CTCLossLayer(blank_index=2)
     outputs = ctc_layer([logits, label_input])  # Logits first, labels second
     
     # Compile model
