@@ -14,7 +14,7 @@ tf.keras.mixed_precision.set_global_policy('float32')
 SAMPLE_RATE = 16000
 EPOCHS = 10
 BATCH_SIZE = 64
-MAX_TRAIN_SAMPLES = 128
+MAX_TRAIN_SAMPLES = 2000
 
 # wer and cer metrics
 class STTMetrics(tf.keras.callbacks.Callback):
@@ -235,7 +235,7 @@ def train_model():
             monitor='val_loss'
         ),
         tf.keras.callbacks.TensorBoard(log_dir="logs"),
-        tf.keras.callbacks.EarlyStopping(patience=3, restore_best_weights=True),
+        tf.keras.callbacks.EarlyStopping(patience=4, restore_best_weights=True),
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.5,
