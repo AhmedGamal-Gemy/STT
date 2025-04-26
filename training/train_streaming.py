@@ -14,7 +14,7 @@ tf.keras.mixed_precision.set_global_policy('float32')
 SAMPLE_RATE = 16000
 EPOCHS = 10
 BATCH_SIZE = 64
-MAX_TRAIN_SAMPLES = 10_000
+MAX_TRAIN_SAMPLES = 128
 
 # wer and cer metrics
 class STTMetrics(tf.keras.callbacks.Callback):
@@ -27,19 +27,15 @@ class STTMetrics(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
         print("\n=== CTC DEBUG START ===")
         try:
-            print("Step 1: Getting validation batch...")
+            # Use the provided validation batch
             ((audio_inputs, true_labels), _) = self.val_batch
                 
             # Get base model
-            print("Step 2: Getting base model...")
             base_model = next(layer for layer in self.model.layers 
                             if isinstance(layer, tf.keras.Model))
             
             # Predict
-            print("Step 3: Running prediction (this might take a while)...")
-            pred_logits = base_model.predict(audio_inputs, verbose=1)  # Add verbose=1 to see progress
-            
-            print("Step 4: Processing predictions...")
+            pred_logits = base_model.predict(audio_inputs, verbose=0)
             
             # Print top predictions for debugging
             log_probs = tf.nn.log_softmax(pred_logits, axis=-1)
@@ -114,6 +110,43 @@ class STTMetrics(tf.keras.callbacks.Callback):
             print(traceback.format_exc())
             
         print("=== CTC DEBUG END ===\n")
+
+class ClassBalanceCallback(tf.keras.callbacks.Callback):
+    def __init__(self, vowel_indices, blank_index=2, space_index=3):
+        super().__init__()
+        self.vowel_indices = vowel_indices
+        self.blank_index = blank_index
+        self.space_index = space_index
+        
+    def on_epoch_begin(self, epoch, logs=None):
+        # Find the logits layer
+        logits_layer = None
+        for layer in self.model.layers:
+            if isinstance(layer, tf.keras.Model):  # Base model
+                for base_layer in layer.layers:
+                    if isinstance(base_layer, tf.keras.layers.Dense) and base_layer.name == "logits":
+                        logits_layer = base_layer
+                        break
+        
+        if logits_layer:
+            # Get current weights
+            weights, biases = logits_layer.get_weights()
+            
+            # Apply balance adjustments at each epoch
+            # The strength increases with epochs to help guide learning
+            vowel_penalty = -3.0 - (epoch * 0.5)  # Gets stronger each epoch
+            blank_penalty = -5.0 - (epoch * 0.5)
+            
+            # Apply penalties
+            biases[self.blank_index] = blank_penalty
+            biases[self.space_index] = -3.0  # Fixed penalty for space
+            
+            for idx in self.vowel_indices:
+                biases[idx] = vowel_penalty
+                
+            # Set the adjusted weights back
+            logits_layer.set_weights([weights, biases])
+            print(f"Epoch {epoch+1}: Applied class balance adjustments")
 
 
 
@@ -192,6 +225,9 @@ def train_model():
         vocab_size=len(tokenizer.vocab)
     )
 
+    vowel_indices = [11, 15, 19, 25, 31]
+
+
     callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
             "checkpoints/model_{epoch:02d}.keras",
@@ -207,7 +243,8 @@ def train_model():
             min_lr=1e-6,
             verbose=1
         ),
-        STTMetrics(real_val_batch, tokenizer)  # Use real validation data
+        STTMetrics(real_val_batch, tokenizer),  # Use real validation data
+        ClassBalanceCallback(vowel_indices)
     ]
 
     # Rest of your code remains the same
@@ -215,20 +252,20 @@ def train_model():
     validation_steps = (MAX_TRAIN_SAMPLES // 2) // BATCH_SIZE
 
     print("Starting training...")
-    # Use curriculum learning instead of direct model.fit
-    history = train_with_curriculum(
-        model,
+    history = model.fit(
         train_dataset,
-        test_dataset,
-        validation_steps,
-        epochs=20,  # Total epochs across all stages
-        callbacks=callbacks
+        steps_per_epoch=steps_per_epoch,
+        validation_data=test_dataset,
+        validation_steps=validation_steps,
+        epochs=EPOCHS,
+        callbacks=callbacks,
+        verbose=1
     )
     
     return history
 
 
-def train_with_curriculum(model, train_dataset, test_dataset,validation_steps, epochs=20, callbacks=None):
+def train_with_curriculum(model, train_dataset, test_dataset, epochs=20, callbacks=None):
     """Train the model using curriculum learning strategy."""
     print("Starting curriculum learning training...")
     
@@ -237,20 +274,8 @@ def train_with_curriculum(model, train_dataset, test_dataset,validation_steps, e
     examples = []
     targets = []
     
-    # Add progress tracking variables
-    batch_count = 0
-    total_examples = 0
-    
-    # IMPORTANT: Limit number of examples to extract based on MAX_TRAIN_SAMPLES
-    max_examples_to_extract = MAX_TRAIN_SAMPLES
-    
-    # Take examples from the dataset with a limit
+    # Take all examples from the dataset
     for batch in train_dataset:
-        # Update batch counter and print progress
-        batch_count += 1
-        if batch_count % 5 == 0:  # Print more frequently (every 5 batches)
-            print(f"Processed {batch_count} batches, {total_examples} examples so far...")
-        
         # Structure is ((audio, labels), targets)
         (audios, labels), batch_targets = batch
         
@@ -263,21 +288,10 @@ def train_with_curriculum(model, train_dataset, test_dataset,validation_steps, e
         for i in range(len(audios_np)):
             examples.append((audios_np[i], labels_np[i]))
             targets.append(targets_np[i])
-            total_examples += 1
-            
-            # Check if we've reached our example limit
-            if total_examples >= max_examples_to_extract:
-                print(f"Reached target of {max_examples_to_extract} examples - stopping extraction.")
-                break
-                
-        # Also break the outer loop if we've hit our target
-        if total_examples >= max_examples_to_extract:
-            break
     
-    print(f"Extraction complete. Processed {batch_count} batches, extracted {len(examples)} examples")
+    print(f"Extracted {len(examples)} examples")
     
     # Sort examples by audio length (shorter first)
-    print("Sorting examples by length...")
     # Get audio length by finding non-zero values in first feature dimension
     lengths = [np.sum(np.abs(ex[0][:, 0]) > 1e-6) for ex in examples]
     sorted_indices = np.argsort(lengths)
@@ -290,9 +304,9 @@ def train_with_curriculum(model, train_dataset, test_dataset,validation_steps, e
     
     # Define curriculum stages
     stages = [
-        {"name": "Easy (short utterances)", "fraction": 0.25, "epochs": 15},
-        {"name": "Medium", "fraction": 0.6, "epochs": 15},
-        {"name": "Full dataset", "fraction": 1.0, "epochs": 20}
+        {"name": "Easy (short utterances)", "fraction": 0.25, "epochs": 5},
+        {"name": "Medium", "fraction": 0.6, "epochs": 5},
+        {"name": "Full dataset", "fraction": 1.0, "epochs": 10}
     ]
     
     # Initialize history to collect metrics
@@ -311,7 +325,6 @@ def train_with_curriculum(model, train_dataset, test_dataset,validation_steps, e
         stage_targets = sorted_targets[:stage_size]
         
         # Create a TensorFlow dataset from these examples
-        print("Preparing dataset for this stage...")
         # Convert back to the expected format: ((audio, labels), targets)
         stage_audios = np.stack([ex[0] for ex in stage_examples])
         stage_labels = np.stack([ex[1] for ex in stage_examples])
@@ -328,7 +341,6 @@ def train_with_curriculum(model, train_dataset, test_dataset,validation_steps, e
             stage_dataset, 
             epochs=stage["epochs"],
             validation_data=test_dataset,
-            validation_steps=validation_steps,
             callbacks=callbacks,
             verbose=1
         )

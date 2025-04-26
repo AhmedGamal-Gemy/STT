@@ -1,5 +1,10 @@
 import tensorflow as tf
+import numpy as np
 from tensorflow.keras import layers, Model
+from tensorflow.keras.saving import register_keras_serializable
+
+
+@register_keras_serializable(package="models.stt_model")
 
 # Build the basic model architecture. I will use CNN to capture patterns and BiLSTM to learn
 # It gets input dimension ( which in out case number of MFCC ) and vocab size from tokenizer ( add 1 for blank )
@@ -28,13 +33,13 @@ def build_stt_model(
     # and this will result for the output shape to be the same as input shape
 
     # CNN Block with strided convolutions
-    x = layers.Conv2D(32, (3,3), strides=(1,2), activation="relu", padding="same")(x)
+    x = layers.Conv2D(32, (3,3), activation="relu", padding="same")(x)
     x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
+    x = layers.MaxPooling2D( (2,1) ) (x) # Downsample that reduce spatial dimensions of input 
 
-    x = layers.Conv2D(64, (3,3), strides=(1,2), activation="relu", padding="same")(x)
+    x = layers.Conv2D(64, (3,3), activation="relu", padding="same")(x)
     x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D( (1,2) ) (x) # Downsample that reduce spatial dimensions of input 
+    x = layers.MaxPooling2D( (2,1) ) (x) # Downsample that reduce spatial dimensions of input 
  
     # Now reshaping for RNN ( batch, time, feature ) by just feature * channels
     x = layers.Reshape( (-1, x.shape[2] * x.shape[3] ) ) (x)
@@ -46,6 +51,9 @@ def build_stt_model(
                                       dropout=0.3, recurrent_dropout=0.2))(x)
     x = layers.Bidirectional(layers.LSTM(256, return_sequences=True,
                                       dropout=0.3, recurrent_dropout=0.2))(x)
+    
+    x = layers.Conv1D(128, 5, padding="same", activation="relu")(x)  # Character-level modeling
+    x = layers.BatchNormalization()(x)  
 
     # Time-distributed dense : adds non-linear feature transformation before CTC
     x = layers.TimeDistributed(layers.Dense(256, activation="relu"))(x)
@@ -62,15 +70,38 @@ def build_stt_model(
     # )(x)
 
     # Output layer with bias against blank token
-    blank_bias_initializer = tf.keras.initializers.Constant(
-        value=[-1.0 if i == vocab_size else 0.0 for i in range(vocab_size + 1)]
-    )
-    
+    # Replace your current final layer with this:
+# Custom bias initializer to balance character classes
+    char_class_bias = np.zeros(vocab_size + 1)
+
+    # 1. Penalize blank token (prevents blank-dominated predictions)
+    char_class_bias[2] = -5.0  # Blank token
+
+    # 2. Penalize space token (prevents space-dominated predictions)
+    char_class_bias[3] = -5.0  # Space token
+
+    # 3. Penalize vowels (model is biased toward vowels)
+    vowel_indices = [11, 15, 19, 25, 31]  # a, e, i, o, u
+    for idx in vowel_indices:
+        char_class_bias[idx] = -4.0
+
+    # 4. Boost consonants (especially common ones)
+    consonant_indices = [12, 13, 14, 16, 17, 18, 20, 21, 22, 23, 24, 
+                        26, 27, 28, 29, 30, 32, 33, 34, 35, 36]  # All consonants
+    common_consonants = [18, 30, 28, 29, 24]  # h, t, r, s, n
+                        
+    for idx in consonant_indices:
+        char_class_bias[idx] = 1.0  # Slight boost for all consonants
+        
+    for idx in common_consonants:
+        char_class_bias[idx] = 2.0  # Extra boost for common consonants
+
+    # Use the custom bias initializer
     outputs = layers.Dense(
-        vocab_size + 1, 
-        activation="linear", 
+        vocab_size + 1,
+        activation="linear",
         name="logits",
-        bias_initializer=blank_bias_initializer
+        bias_initializer=tf.keras.initializers.Constant(value=char_class_bias)
     )(x)
 
     return Model(inputs=input_layer, outputs=outputs)
@@ -80,14 +111,14 @@ def build_stt_model(
 
 # Create the CTC layer for Speech task. (CTC loss is automatically assign portions of audio to labels and penlizes any predication that is incorrect)
 class CTCLossLayer(layers.Layer):
-    """Custom CTC loss layer with blank penalty."""
+    """Custom CTC loss layer with simplified blank penalty."""
     def __init__(self, blank_index=None, name="ctc_loss"):
         super().__init__(name=name)
         self.blank_index = blank_index
 
     def call(self, inputs):
         y_pred, y_true = inputs  # y_pred shape: (batch, time, vocab+1)
-
+        
         # DEBUGGING
         tf.debugging.assert_rank(y_pred, 3, message="Logits must be 3D (batch, time, vocab)")
         tf.debugging.assert_rank(y_true, 2, message="Labels must be 2D (batch, labels)")
@@ -99,29 +130,45 @@ class CTCLossLayer(layers.Layer):
             axis=1
         )
         
-        # Apply a fixed penalty to blank token
-        blank_penalty_value = 25.0  # This forces the model away from blank predictions
-        blank_mask = tf.one_hot(indices=[self.blank_index], depth=tf.shape(y_pred)[-1])
-        blank_mask = tf.reshape(blank_mask, [1, 1, -1])  # Shape: [1, 1, vocab_size+1]
+        # Simpler approach: Use one-hot masks for penalties
+        # 1. Blank token penalty
+        blank_penalty = 25.0
+        blank_mask = tf.one_hot(self.blank_index, depth=tf.shape(y_pred)[-1])
+        blank_mask = tf.reshape(blank_mask, [1, 1, -1])  # [1, 1, vocab_size+1]
         
-        # Subtract the penalty from blank logits
-        y_pred_adjusted = y_pred - (blank_mask * blank_penalty_value)
+        # 2. Space token penalty
+        space_penalty = 20.0
+        space_mask = tf.one_hot(3, depth=tf.shape(y_pred)[-1])
+        space_mask = tf.reshape(space_mask, [1, 1, -1])
+        
+        # 3. Vowel penalties (a, e, i, o, u)
+        vowel_penalty = 15.0
+        vowel_indices = tf.constant([11, 15, 19, 25, 31])
+        vowel_mask = tf.reduce_sum(tf.one_hot(vowel_indices, depth=tf.shape(y_pred)[-1]), axis=0)
+        vowel_mask = tf.reshape(vowel_mask, [1, 1, -1])
+        
+        # Apply all penalties at once
+        y_pred_adjusted = y_pred - (blank_mask * blank_penalty) - (space_mask * space_penalty) - (vowel_mask * vowel_penalty)
         
         loss = tf.nn.ctc_loss(
             labels=y_true,
-            logits=y_pred_adjusted,  # Use the adjusted logits with blank penalty
+            logits=y_pred_adjusted,
             label_length=label_length,
             logit_length=input_length,
             logits_time_major=False,
             blank_index=self.blank_index
         )
 
-        # Add small epsilon to avoid log(0)
         self.add_loss(tf.reduce_mean(loss) + 1e-7)
         return y_pred  # Return original predictions for the next layer
 
     def get_config(self):
         return {"blank_index": self.blank_index}
+    
+    
+    
+    
+
 
 # Combine the basic model with CTC loss        
 def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:

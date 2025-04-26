@@ -16,29 +16,48 @@ class Tokenizer:
 
     # Get all vocablary from the dataset and create mappings from and to char
     def build_vocab(self, dataset: tf.data.Dataset) -> None:
-
         self.char_counts = {}  # Reset counts when building vocab
-
+        
+        # Debug the dataset structure
+        sample_batch = next(iter(dataset))
+        print("DEBUG: Dataset sample structure:")
+        print(f"Keys in batch: {list(sample_batch.keys())}")
+        
         for batch in dataset:
-
-            # Check if the sentence is binary decode it to usual 
-            if isinstance(batch['sentence'], bytes):
-                text_batch = batch['sentence'].decode('utf-8').lower()
-            else:
-                text_batch = batch['sentence'].lower()    
-
-            for char in text_batch:
-                self.char_counts[char] = self.char_counts.get(char, 0) + 1
-
-
-        chars = sorted( self.char_counts.keys() )
-
-        # Put the whole vocab ( chars + sepecial characters ) in the class attribute
-        self.vocab = list( self.special_tokens.keys() ) + chars
-
-        # Create the mappings from and to index and char
-        self.char_to_id = { char : idx for idx, char in enumerate( self.vocab ) }
-        self.id_to_char = { idx : char for idx, char in enumerate( self.vocab ) }
+            try:
+                # Try to access the sentence field
+                if 'sentence' in batch:
+                    text_field = batch['sentence']
+                else:
+                    # Print all keys to debug
+                    print(f"Warning: 'sentence' not in batch. Available keys: {list(batch.keys())}")
+                    # Try alternate fields
+                    if 'text' in batch:
+                        text_field = batch['text']
+                    elif 'transcript' in batch:
+                        text_field = batch['transcript']
+                    else:
+                        print("Could not find text field in batch")
+                        continue
+                        
+                # Process the text
+                if isinstance(text_field, bytes):
+                    text_batch = text_field.decode('utf-8').lower()
+                else:
+                    text_batch = str(text_field).lower()
+                    
+                # Count characters
+                for char in text_batch:
+                    self.char_counts[char] = self.char_counts.get(char, 0) + 1
+                    
+            except Exception as e:
+                print(f"Error processing batch: {e}")
+        
+        # Rest of your code remains the same
+        chars = sorted(self.char_counts.keys())
+        self.vocab = list(self.special_tokens.keys()) + chars
+        self.char_to_id = {char: idx for idx, char in enumerate(self.vocab)}
+        self.id_to_char = {idx: char for idx, char in enumerate(self.vocab)}
 
     # Encode from char to indexes and return tensor
     def encode(self, text: str) -> tf.Tensor:
