@@ -58,10 +58,10 @@ def build_stt_model(
     print("Reshaped features dimension:", x.shape)
 
     # BiLSTM Layers with regularization to avoid overfitting. Bidirection to capture information from both sides and LSTM because audio is sequential
-    x = layers.Bidirectional(layers.LSTM(64, return_sequences=True, 
+    x = layers.Bidirectional(layers.LSTM(128, return_sequences=True, 
                                       dropout=0.2, recurrent_dropout=0.2, kernel_regularizer = l2_reg))(x)
-    # x = layers.Bidirectional(layers.LSTM(128, return_sequences=True,
-    #                                   dropout=0.3, recurrent_dropout=0.5, kernel_regularizer = l2_reg))(x)
+    x = layers.Bidirectional(layers.LSTM(128, return_sequences=True,
+                                      dropout=0.3, recurrent_dropout=0.5, kernel_regularizer = l2_reg))(x)
     
     x = layers.Conv1D(128, 5, padding="same", activation="relu")(x)  # Character-level modeling
     x = layers.BatchNormalization()(x)  
