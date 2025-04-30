@@ -59,9 +59,9 @@ def build_stt_model(
 
     # BiLSTM Layers with regularization to avoid overfitting. Bidirection to capture information from both sides and LSTM because audio is sequential
     x = layers.Bidirectional(layers.LSTM(128, return_sequences=True, 
-                                      dropout=0.2, recurrent_dropout=0.2, kernel_regularizer = l2_reg))(x)
+                                      dropout=0.4, recurrent_dropout=0.4, kernel_regularizer = l2_reg))(x)
     x = layers.Bidirectional(layers.LSTM(128, return_sequences=True,
-                                      dropout=0.2, recurrent_dropout=0.2, kernel_regularizer = l2_reg))(x)
+                                      dropout=0.4, recurrent_dropout=0.4, kernel_regularizer = l2_reg))(x)
     
     x = layers.Conv1D(128, 5, padding="same", activation="relu")(x)  # Character-level modeling
     x = layers.BatchNormalization()(x)  
@@ -145,29 +145,9 @@ class CTCLossLayer(layers.Layer):
             axis=1
         )
         
-        # Simpler approach: Use one-hot masks for penalties
-        # 1. Blank token penalty
-        blank_penalty = 1.0
-        blank_mask = tf.one_hot(self.blank_index, depth=tf.shape(y_pred)[-1])
-        blank_mask = tf.reshape(blank_mask, [1, 1, -1])  # [1, 1, vocab_size+1]
-        
-        # 2. Space token penalty
-        space_penalty = 1.0
-        space_mask = tf.one_hot(3, depth=tf.shape(y_pred)[-1])
-        space_mask = tf.reshape(space_mask, [1, 1, -1])
-        
-        # 3. Vowel penalties (a, e, i, o, u)
-        vowel_penalty = 5.0
-        vowel_indices = tf.constant([11, 15, 19, 25, 31])
-        vowel_mask = tf.reduce_sum(tf.one_hot(vowel_indices, depth=tf.shape(y_pred)[-1]), axis=0)
-        vowel_mask = tf.reshape(vowel_mask, [1, 1, -1])
-        
-        # Apply all penalties at once
-        y_pred_adjusted = y_pred - (blank_mask * blank_penalty) - (space_mask * space_penalty) - (vowel_mask * vowel_penalty)
-        
         loss = tf.nn.ctc_loss(
             labels=y_true,
-            logits=y_pred_adjusted,
+            logits=y_pred,
             label_length=label_length,
             logit_length=input_length,
             logits_time_major=False,

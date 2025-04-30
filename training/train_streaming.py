@@ -12,9 +12,9 @@ from jiwer import wer, cer
 tf.keras.mixed_precision.set_global_policy('float32')
 
 SAMPLE_RATE = 16000
-EPOCHS = 10
+EPOCHS = 20
 BATCH_SIZE = 64
-MAX_TRAIN_SAMPLES = 1_000
+MAX_TRAIN_SAMPLES = 30_000
 
 # wer and cer metrics
 class STTMetrics(tf.keras.callbacks.Callback):
@@ -110,12 +110,12 @@ class ClassBalanceCallback(tf.keras.callbacks.Callback):
             
             # Apply balance adjustments at each epoch
             # The strength increases with epochs to help guide learning
-            vowel_penalty = -0.7  
+            vowel_penalty = -1.0  
             blank_penalty = -0.2
             
             # Apply penalties
             biases[self.blank_index] = blank_penalty
-            biases[self.space_index] = 0.5
+            biases[self.space_index] = 0.2
             
             for idx in self.vowel_indices:
                 biases[idx] = vowel_penalty
@@ -211,13 +211,13 @@ def train_model():
             monitor='val_loss'
         ),
         tf.keras.callbacks.TensorBoard(log_dir="logs"),
-        tf.keras.callbacks.EarlyStopping(patience=4, restore_best_weights=True),
+        tf.keras.callbacks.EarlyStopping(patience=6, restore_best_weights=True),
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.5,
             patience=1,
             min_lr=1e-6,
-            verbose=1
+            verbose=2
         ),
         STTMetrics(real_val_batch, tokenizer),  # Use real validation data
         ClassBalanceCallback(vowel_indices)
