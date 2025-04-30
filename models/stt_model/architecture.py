@@ -30,7 +30,7 @@ def build_stt_model(
     x = layers.Reshape( ( -1, input_dim, 1) ) (input_layer)
 
     # REGULARIZATION
-    l2_reg = tf.keras.regularizers.L2(1e-5)
+    l2_reg = tf.keras.regularizers.L2(5e-5)
 
 
     x = layers.Lambda(lambda x: (x - tf.reduce_mean(x, axis=[1, 2], keepdims=True)) / 
@@ -206,7 +206,7 @@ def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
     model = Model(inputs=[mfcc_input, label_input], outputs=outputs)
 
     optimizer = tf.keras.optimizers.Adam(
-        learning_rate=1e-4,
+        learning_rate=1e-3,
         clipnorm=1.0,
         epsilon=1e-7
     )

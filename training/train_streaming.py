@@ -110,7 +110,7 @@ class ClassBalanceCallback(tf.keras.callbacks.Callback):
             
             # Apply balance adjustments at each epoch
             # The strength increases with epochs to help guide learning
-            vowel_penalty = -0.2  
+            vowel_penalty = -0.7  
             blank_penalty = -0.2
             
             # Apply penalties
