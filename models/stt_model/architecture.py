@@ -61,7 +61,7 @@ def build_stt_model(
     x = layers.Bidirectional(layers.LSTM(128, return_sequences=True, 
                                       dropout=0.2, recurrent_dropout=0.2, kernel_regularizer = l2_reg))(x)
     x = layers.Bidirectional(layers.LSTM(128, return_sequences=True,
-                                      dropout=0.3, recurrent_dropout=0.5, kernel_regularizer = l2_reg))(x)
+                                      dropout=0.2, recurrent_dropout=0.2, kernel_regularizer = l2_reg))(x)
     
     x = layers.Conv1D(128, 5, padding="same", activation="relu")(x)  # Character-level modeling
     x = layers.BatchNormalization()(x)  
@@ -147,12 +147,12 @@ class CTCLossLayer(layers.Layer):
         
         # Simpler approach: Use one-hot masks for penalties
         # 1. Blank token penalty
-        blank_penalty = 10.0
+        blank_penalty = 1.0
         blank_mask = tf.one_hot(self.blank_index, depth=tf.shape(y_pred)[-1])
         blank_mask = tf.reshape(blank_mask, [1, 1, -1])  # [1, 1, vocab_size+1]
         
         # 2. Space token penalty
-        space_penalty = 8.0
+        space_penalty = 1.0
         space_mask = tf.one_hot(3, depth=tf.shape(y_pred)[-1])
         space_mask = tf.reshape(space_mask, [1, 1, -1])
         

@@ -14,7 +14,7 @@ tf.keras.mixed_precision.set_global_policy('float32')
 SAMPLE_RATE = 16000
 EPOCHS = 10
 BATCH_SIZE = 64
-MAX_TRAIN_SAMPLES = 25_000
+MAX_TRAIN_SAMPLES = 1_000
 
 # wer and cer metrics
 class STTMetrics(tf.keras.callbacks.Callback):
@@ -22,6 +22,7 @@ class STTMetrics(tf.keras.callbacks.Callback):
         super().__init__()
         self.val_batch = val_batch
         self.tokenizer = tokenizer
+        self.blank_index = 2 
         print("STTMetrics initialized with AGGRESSIVE token forcing")
 
     def on_epoch_end(self, epoch, logs=None):
@@ -42,46 +43,21 @@ class STTMetrics(tf.keras.callbacks.Callback):
             top_chars = tf.math.top_k(log_probs[0, 0, :], k=5)
             print(f"| Top 5 predictions at first timestep: {top_chars}")
             
-            # DIRECT OVERRIDE: Set blank token to extremely negative value
-            blank_index = 2
-            
-            # Check if already numpy or if it's a TensorFlow tensor
-            if isinstance(pred_logits, np.ndarray):
-                output_logits = pred_logits
-            else:
-                output_logits = pred_logits.numpy()  # Convert to numpy
-            
-            # Set all blank tokens to extreme negative value
-            output_logits[:, :, blank_index] = -1000.0  # Effectively zero probability
-            
-            # Force some predictions by finding top non-blank character at each position
-            for i in range(output_logits.shape[0]):  # For each example
-                # Find the best non-blank characters
-                char_logits = output_logits[i, :, :blank_index]
-                best_chars = np.argmax(char_logits, axis=1)
-                
-                # Force a prediction every ~10 timesteps 
-                for t in range(0, output_logits.shape[1], 10):
-                    if t < output_logits.shape[1]:
-                        char_idx = best_chars[t]
-                        output_logits[i, t, char_idx] = 20.0  # Strongly force this character
-            
-            # Convert back to tensor
-            forced_logits = tf.convert_to_tensor(output_logits, dtype=tf.float32)
-            
-            # Greedy decode with forced characters
-            decoded, _ = tf.keras.backend.ctc_decode(
-                forced_logits,
-                input_length=[pred_logits.shape[1]] * pred_logits.shape[0],
-                greedy=True  # Simpler decoding for forced predictions
+            # PROPER CTC DECODING - no extreme penalties
+            decoded, _ = tf.nn.ctc_beam_search_decoder(
+                inputs=tf.transpose(pred_logits, [1, 0, 2]),
+                sequence_length=[pred_logits.shape[1]] * pred_logits.shape[0],
+                beam_width=100,
+                top_paths=1
             )
+            
             pred_ids = decoded[0]
             
             # Convert to text
             texts_pred = []
-            for ids in pred_ids.numpy():
-                # Filter out padding and invalid tokens
-                valid_ids = [idx for idx in ids if 0 <= idx < len(self.tokenizer.vocab)]
+            for ids in tf.sparse.to_dense(pred_ids).numpy():
+                # Filter out padding and blank tokens
+                valid_ids = [idx for idx in ids if idx > 0 and idx != self.blank_index]
                 if not valid_ids:  # If empty prediction
                     texts_pred.append("[empty]")
                 else:
@@ -90,7 +66,7 @@ class STTMetrics(tf.keras.callbacks.Callback):
             texts_true = []
             for label in true_labels:
                 # Filter out padding
-                valid_ids = [idx for idx in label if idx > 0 and idx < len(self.tokenizer.vocab)]
+                valid_ids = [idx for idx in label if idx > 0]
                 texts_true.append(self.tokenizer.decode(valid_ids))
             
             # Calculate metrics
@@ -134,12 +110,12 @@ class ClassBalanceCallback(tf.keras.callbacks.Callback):
             
             # Apply balance adjustments at each epoch
             # The strength increases with epochs to help guide learning
-            vowel_penalty = -3.0 - (epoch * 0.5)  # Gets stronger each epoch
-            blank_penalty = -5.0 - (epoch * 0.5)
+            vowel_penalty = -0.2  
+            blank_penalty = -0.2
             
             # Apply penalties
             biases[self.blank_index] = blank_penalty
-            biases[self.space_index] = -3.0  # Fixed penalty for space
+            biases[self.space_index] = 0.5
             
             for idx in self.vowel_indices:
                 biases[idx] = vowel_penalty
