@@ -30,7 +30,7 @@ def build_stt_model(
     x = layers.Reshape( ( -1, input_dim, 1) ) (input_layer)
 
     # REGULARIZATION
-    l2_reg = tf.keras.regularizers.L2(0.0001)
+    l2_reg = tf.keras.regularizers.L2(5e-4)
 
 
     x = layers.Lambda(lambda x: (x - tf.reduce_mean(x, axis=[1, 2], keepdims=True)) / 
