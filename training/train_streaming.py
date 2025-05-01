@@ -14,7 +14,7 @@ tf.keras.mixed_precision.set_global_policy('float32')
 SAMPLE_RATE = 16000
 EPOCHS = 20
 BATCH_SIZE = 64
-MAX_TRAIN_SAMPLES = 30_000
+MAX_TRAIN_SAMPLES = 50_000
 
 # wer and cer metrics
 class STTMetrics(tf.keras.callbacks.Callback):
