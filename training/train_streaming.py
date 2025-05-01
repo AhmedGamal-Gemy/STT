@@ -110,12 +110,12 @@ class ClassBalanceCallback(tf.keras.callbacks.Callback):
             
             # Apply balance adjustments at each epoch
             # The strength increases with epochs to help guide learning
-            vowel_penalty = -1.0  
+            vowel_penalty = -0.8  
             blank_penalty = -0.2
             
             # Apply penalties
             biases[self.blank_index] = blank_penalty
-            biases[self.space_index] = 0.2
+            biases[self.space_index] = -0.2
             
             for idx in self.vowel_indices:
                 biases[idx] = vowel_penalty
@@ -220,13 +220,13 @@ def train_model():
             verbose=2
         ),
         STTMetrics(real_val_batch, tokenizer),  # Use real validation data
-        ClassBalanceCallback(vowel_indices)
+        # ClassBalanceCallback(vowel_indices)
     ]
 
     # Rest of your code remains the same
     steps_per_epoch = MAX_TRAIN_SAMPLES // BATCH_SIZE
     validation_steps = (MAX_TRAIN_SAMPLES // 2) // BATCH_SIZE
-
+    print(tokenizer.vocab)
     print("Starting training...")
     history = model.fit(
         train_dataset,

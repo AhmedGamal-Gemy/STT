@@ -30,7 +30,7 @@ def build_stt_model(
     x = layers.Reshape( ( -1, input_dim, 1) ) (input_layer)
 
     # REGULARIZATION
-    l2_reg = tf.keras.regularizers.L2(5e-5)
+    l2_reg = tf.keras.regularizers.L2(0.0001)
 
 
     x = layers.Lambda(lambda x: (x - tf.reduce_mean(x, axis=[1, 2], keepdims=True)) / 
@@ -58,9 +58,12 @@ def build_stt_model(
     print("Reshaped features dimension:", x.shape)
 
     # BiLSTM Layers with regularization to avoid overfitting. Bidirection to capture information from both sides and LSTM because audio is sequential
-    x = layers.Bidirectional(layers.LSTM(128, return_sequences=True, 
+    x = layers.Bidirectional(layers.LSTM(64, return_sequences=True, 
                                       dropout=0.4, recurrent_dropout=0.4, kernel_regularizer = l2_reg))(x)
-    x = layers.Bidirectional(layers.LSTM(128, return_sequences=True,
+
+    x = layers.Dropout(0.4)(x)
+
+    x = layers.Bidirectional(layers.LSTM(64, return_sequences=True,
                                       dropout=0.4, recurrent_dropout=0.4, kernel_regularizer = l2_reg))(x)
     
     x = layers.Conv1D(128, 5, padding="same", activation="relu")(x)  # Character-level modeling
@@ -186,7 +189,7 @@ def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
     model = Model(inputs=[mfcc_input, label_input], outputs=outputs)
 
     optimizer = tf.keras.optimizers.Adam(
-        learning_rate=1e-3,
+        learning_rate=0.0005,
         clipnorm=1.0,
         epsilon=1e-7
     )
