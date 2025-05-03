@@ -28,7 +28,8 @@ def load_common_voice_stream(
         "mozilla-foundation/common_voice_17_0",
         language,
         split = split,
-        streaming = True
+        streaming = True,
+        trust_remote_code=True
     )
 
     # if max samples specfied take only that number of samples
