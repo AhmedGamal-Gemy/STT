@@ -45,7 +45,7 @@ def build_stt_model(
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D( (2,1) ) (x) # Downsample that reduce spatial dimensions of input 
 
-    x = layers.Conv2D(64, (3,3), activation="relu", padding="same", kernel_regularizer = l2_reg)(x)
+    x = layers.Conv2D(32, (3,3), activation="relu", padding="same", kernel_regularizer = l2_reg)(x)
     x = layers.BatchNormalization()(x)
     x = layers.MaxPooling2D( (2,1) ) (x) # Downsample that reduce spatial dimensions of input 
 
@@ -74,7 +74,7 @@ def build_stt_model(
     x = layers.BatchNormalization()(x)  
 
     # Time-distributed dense : adds non-linear feature transformation before CTC
-    x = layers.TimeDistributed(layers.Dense(256, activation="relu", kernel_regularizer = l2_reg))(x)
+    x = layers.TimeDistributed(layers.Dense(128, activation="relu", kernel_regularizer = l2_reg))(x)
 
     x = layers.Dropout(0.4)(x)
 
