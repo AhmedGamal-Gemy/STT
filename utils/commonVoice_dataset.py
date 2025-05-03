@@ -1,4 +1,3 @@
-
 import tensorflow as tf
 from datasets import load_dataset, Dataset
 import numpy as np
@@ -13,7 +12,6 @@ import os
 def load_common_voice_stream(
         split: str = "train",
         language: str = "en",
-        sample_rate : int = 16000,
         max_samples : int = None,
         cache_dir: str = "./data_cache"
 ) -> tf.data.Dataset :
@@ -53,7 +51,9 @@ def preprocess_instance(
 
     # Process the array
     padded_audio = audio_processor.pad_audio(audio_array)
+
     processed_audio = audio_processor.audio_to_mfcc(padded_audio)
+
     if tf.math.reduce_any(tf.math.is_nan(processed_audio)):
         print("NaN detected in MFCC features")
         return None  # Will be filtered later
@@ -67,6 +67,7 @@ def preprocess_instance(
 
 # Create tensorflow dataset from the hugging face dataset and preprocess each instance return tf dataset
 def create_tf_dataset(hf_dataset, audio_processor, tokenizer, batch_size=32):
+    
     def generator():
         for instance in hf_dataset:
             try:
@@ -110,7 +111,7 @@ def create_tf_dataset(hf_dataset, audio_processor, tokenizer, batch_size=32):
         )
     )
     
-    # Add dummy outputs
+    # Add dummy outputs for CTC loss later
     dataset = dataset.map(
         lambda mfcc, labels: ((mfcc, labels), tf.zeros(tf.shape(mfcc)[0]))
     )

@@ -52,12 +52,13 @@ def build_stt_model(
     # Drop entire feature maps
     x = layers.SpatialDropout2D(0.2)(x)
  
-    # Now reshaping for RNN ( batch, time, feature ) by just feature * channels
+    # Now reshaping for the RNN ( batch, time, feature ) by just feature * channels
     x = layers.Reshape( (-1, x.shape[2] * x.shape[3] ) ) (x)
 
     print("Reshaped features dimension:", x.shape)
 
-    # BiLSTM Layers with regularization to avoid overfitting. Bidirection to capture information from both sides and LSTM because audio is sequential
+    # BiLSTM Layers with regularization to avoid overfitting. Bidirection to capture information from both sides and 
+    # LSTM because audio is sequential
     x = layers.Bidirectional(layers.LSTM(64, return_sequences=True, 
                                       dropout=0.5, recurrent_dropout=0.4, kernel_regularizer = l2_reg))(x)
     x = layers.BatchNormalization()(x)
@@ -77,19 +78,7 @@ def build_stt_model(
 
     x = layers.Dropout(0.4)(x)
 
-    # # Initialize embeddings with some prior knowledge
-    # char_embed_init = tf.random_normal_initializer(mean=0.0, stddev=0.1)
-    # outputs = layers.Dense(
-    #     vocab_size + 1,
-    #     activation="linear",
-    #     bias_initializer="zeros",
-    #     kernel_initializer=char_embed_init,
-    #     name="logits"
-    # )(x)
-
-    # Output layer with bias against blank token
-    # Replace your current final layer with this:
-# Custom bias initializer to balance character classes
+#   Custom bias initializer to balance character classes
     char_class_bias = np.zeros(vocab_size + 1)
 
     for i in range(3, vocab_size + 1):  # Skip pad, unk, blank
@@ -130,7 +119,7 @@ def build_stt_model(
 
 
 
-# Create the CTC layer for Speech task. (CTC loss is automatically assign portions of audio to labels and penlizes any predication that is incorrect)
+# Create the CTC layer for Speech task. (CTC loss is automatically assigning portions of audio to labels and penlizes any predication that is incorrect)
 class CTCLossLayer(layers.Layer):
     """Custom CTC loss layer with simplified blank penalty."""
     def __init__(self, blank_index=None, name="ctc_loss"):
@@ -139,10 +128,6 @@ class CTCLossLayer(layers.Layer):
 
     def call(self, inputs):
         y_pred, y_true = inputs  # y_pred shape: (batch, time, vocab+1)
-        
-        # DEBUGGING
-        tf.debugging.assert_rank(y_pred, 3, message="Logits must be 3D (batch, time, vocab)")
-        tf.debugging.assert_rank(y_true, 2, message="Labels must be 2D (batch, labels)")
         
         batch_size = tf.shape(y_pred)[0]
         input_length = tf.fill([batch_size], tf.shape(y_pred)[1])  # [batch_size]
@@ -167,9 +152,6 @@ class CTCLossLayer(layers.Layer):
         return {"blank_index": self.blank_index}
     
 
-    
-    
-
 
 # Combine the basic model with CTC loss        
 def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
@@ -184,7 +166,7 @@ def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
     base_model = build_stt_model(input_dim, vocab_size)
     logits = base_model(mfcc_input)  # shape: (batch, time, vocab+1)
     
-    # CTC layer - note the input order!
+    # CTC layer
     ctc_layer = CTCLossLayer(blank_index=2)
     outputs = ctc_layer([logits, label_input])  # Logits first, labels second
     
@@ -200,15 +182,6 @@ def create_STT_with_CTC(input_dim=13, vocab_size=37) -> Model:
     model.compile(optimizer=optimizer)
     
     return model
-
-    
-def create_simple_STT_without_CTC(input_dim=13, vocab_size=37):
-    input_layer = layers.Input(shape=(None, input_dim))
-    # Just two layers to start
-    x = layers.Bidirectional(layers.LSTM(64, return_sequences=True))(input_layer)
-    outputs = layers.Dense(vocab_size+1)(x)
-    
-    return Model(inputs=input_layer, outputs=outputs)
 
 
 

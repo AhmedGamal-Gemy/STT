@@ -82,13 +82,17 @@ class AudioProcessor:
         return np.concatenate(frames)
 
     # Converting audio to number of mfcc ( Exactly like number of components in PCA ) and time steps and return tensor 
-    def audio_to_mfcc(self, audio : np.ndarray) -> tf.Tensor:
+    def audio_to_mfcc(self, audio : np.ndarray, augment=True) -> tf.Tensor:
         
         # Make sure the type is float 32
         audio = audio.astype(np.float32)
         
-        # Speed the audio
-        audio = self.speed_audio(audio)
+        if augment:
+            # Speed the audio
+            audio = self.speed_audio(audio)
+
+            # Add noise to the audio
+            audio = self.add_noise(audio)
         
         # Normalize the audio
         audio = audio / ( np.max( np.abs(audio) ) + 1e-12)
@@ -100,6 +104,10 @@ class AudioProcessor:
             n_fft = self.frame_length,
             hop_length = self.hop_length
         )
+
+        if augment:
+            mfcc = self.spec_augment(mfcc)
+
         # Instead of returning the n_mfcc features as rows and time steps as column. Transpose them.
         return tf.convert_to_tensor( mfcc.T, dtype = tf.float32 ) # (time steps, n_mfcc)
 
@@ -150,6 +158,31 @@ class AudioProcessor:
             return audio[:target_length]
         
         return np.pad(audio, (0, target_length - len(audio)))
+
+    def add_noise(self, audio, noise_factor=0.005):
+        noise = np.random.randn(len(audio))
+        augmented_audio = audio + noise_factor * noise
+        return augmented_audio.astype(np.float32)
+
+    def spec_augment(self, mfcc, frequency_masking_para=5, time_masking_para=20):
+        mfcc = mfcc.copy()
+        # Frequency masking
+        num_masks = np.random.randint(1, 3)
+        for _ in range(num_masks):
+            f = int(np.random.uniform(0, frequency_masking_para))
+            if mfcc.shape[0] <= 0 or mfcc.shape[1] - f <= 0:
+                continue
+            f0 = np.random.randint(0, mfcc.shape[1] - f)
+            mfcc[:, f0:f0+f] = 0
+        # Time masking
+        num_masks = np.random.randint(1, 3)
+        for _ in range(num_masks):
+            t = int(np.random.uniform(0, time_masking_para))
+            if mfcc.shape[0] - t <= 0:
+                continue
+            t0 = np.random.randint(0, mfcc.shape[0] - t)
+            mfcc[t0:t0+t, :] = 0
+        return mfcc
 
 if __name__ == "__main__" :
     

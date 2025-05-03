@@ -14,7 +14,7 @@ tf.keras.mixed_precision.set_global_policy('float32')
 SAMPLE_RATE = 16000
 EPOCHS = 20
 BATCH_SIZE = 64
-MAX_TRAIN_SAMPLES = 50_000
+MAX_TRAIN_SAMPLES = 1000
 
 # wer and cer metrics
 class STTMetrics(tf.keras.callbacks.Callback):
@@ -43,7 +43,7 @@ class STTMetrics(tf.keras.callbacks.Callback):
             top_chars = tf.math.top_k(log_probs[0, 0, :], k=5)
             print(f"| Top 5 predictions at first timestep: {top_chars}")
             
-            # PROPER CTC DECODING - no extreme penalties
+            # CTC DECODING 
             decoded, _ = tf.nn.ctc_beam_search_decoder(
                 inputs=tf.transpose(pred_logits, [1, 0, 2]),
                 sequence_length=[pred_logits.shape[1]] * pred_logits.shape[0],
@@ -201,7 +201,7 @@ def train_model():
         vocab_size=len(tokenizer.vocab)
     )
 
-    vowel_indices = [11, 15, 19, 25, 31]
+    # vowel_indices = [11, 15, 19, 25, 31]
 
 
     callbacks = [
@@ -210,8 +210,11 @@ def train_model():
             save_best_only=True,
             monitor='val_loss'
         ),
+
         tf.keras.callbacks.TensorBoard(log_dir="logs"),
-        tf.keras.callbacks.EarlyStopping(patience=6, restore_best_weights=True),
+
+        tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
+
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.5,
@@ -219,11 +222,11 @@ def train_model():
             min_lr=1e-6,
             verbose=2
         ),
+
         STTMetrics(real_val_batch, tokenizer),  # Use real validation data
         # ClassBalanceCallback(vowel_indices)
     ]
 
-    # Rest of your code remains the same
     steps_per_epoch = MAX_TRAIN_SAMPLES // BATCH_SIZE
     validation_steps = (MAX_TRAIN_SAMPLES // 2) // BATCH_SIZE
     print(tokenizer.vocab)

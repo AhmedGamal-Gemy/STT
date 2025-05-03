@@ -6,7 +6,7 @@ import numpy as np
 class Tokenizer:
 
     def __init__(self, vocab: List[str] = None, max_text_length: int = 100):
-            # Add "<blank>" to special tokens (index 2)
+
             self.special_tokens = {"<pad>": 0, "<unk>": 1, "<blank>": 2}  
             self.vocab = list(self.special_tokens.keys())  # Initialize with special tokens
             self.max_text_length = max_text_length
@@ -53,7 +53,6 @@ class Tokenizer:
             except Exception as e:
                 print(f"Error processing batch: {e}")
         
-        # Rest of your code remains the same
         chars = sorted(self.char_counts.keys())
         self.vocab = list(self.special_tokens.keys()) + chars
         self.char_to_id = {char: idx for idx, char in enumerate(self.vocab)}
@@ -71,7 +70,7 @@ class Tokenizer:
 
     # Decode from indexes to char and return string
     def decode(self, token_ids):
-        """Convert token IDs back to text"""
+
         # Handle different input types
         if hasattr(token_ids, 'numpy'):
             token_ids = token_ids.numpy()  # Convert TF tensor to numpy array
