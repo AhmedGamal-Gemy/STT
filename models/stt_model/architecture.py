@@ -50,7 +50,7 @@ def build_stt_model(
     x = layers.MaxPooling2D( (2,1) ) (x) # Downsample that reduce spatial dimensions of input 
 
     # Drop entire feature maps
-    x = layers.SpatialDropout2D(0.2)(x)
+    x = layers.SpatialDropout2D(0.4)(x)
  
     # Now reshaping for the RNN ( batch, time, feature ) by just feature * channels
     x = layers.Reshape( (-1, x.shape[2] * x.shape[3] ) ) (x)
@@ -62,13 +62,13 @@ def build_stt_model(
     x = layers.Bidirectional(layers.LSTM(64, return_sequences=True, 
                                       dropout=0.5, recurrent_dropout=0.4, kernel_regularizer = l2_reg))(x)
     x = layers.BatchNormalization()(x)
-    x = layers.Dropout(0.4)(x)
+    x = layers.Dropout(0.5)(x)
 
     x = layers.Bidirectional(layers.LSTM(64, return_sequences=True,
                                       dropout=0.5, recurrent_dropout=0.4, kernel_regularizer = l2_reg))(x)
     
     x = layers.BatchNormalization()(x)
-    x = layers.Dropout(0.4)(x)
+    x = layers.Dropout(0.5)(x)
 
     x = layers.Conv1D(128, 5, padding="same", activation="relu")(x)  # Character-level modeling
     x = layers.BatchNormalization()(x)  
